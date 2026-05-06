@@ -18,6 +18,13 @@ jobs:
         run: |
           curl -fsSL https://archive.kali.org/archive-key.asc | sudo gpg --dearmor -o /usr/share/keyrings/kali-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware" | sudo tee /etc/apt/sources.list.d/kali.list
+          
+          # Prevent Kali from overwriting core Ubuntu system files (UsrMerge conflict fix)
+          sudo apt-mark hold base-files base-passwd
+          
+          # Set Kali repo priority lower than Ubuntu to avoid breaking core dependencies
+          echo -e "Package: *\nPin: release o=Kali\nPin-Priority: 100" | sudo tee /etc/apt/preferences.d/kali
+          
           sudo apt update
 
       - name: Install XFCE Desktop + XRDP
