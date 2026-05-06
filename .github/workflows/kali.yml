@@ -16,8 +16,12 @@ jobs:
         run: |
           apt update
           apt install -y sudo curl wget gnupg2 dbus-x11 xfce4 xfce4-goodies xrdp xorgxrdp
+          # Mock systemctl so the install script doesn't fail on systemd-less container
+          sudo ln -sf /bin/true /usr/local/sbin/systemctl
           # Install Tailscale via official script
           curl -fsSL https://tailscale.com/install.sh | sh
+          # Restore real systemctl path (best effort)
+          sudo rm -f /usr/local/sbin/systemctl
           
       - name: Install Kali Tools
         run: |
