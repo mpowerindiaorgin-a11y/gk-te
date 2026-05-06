@@ -6,27 +6,32 @@ on:
 jobs:
   kali-gui:
     runs-on: ubuntu-latest
-    container:
-      image: kalilinux/kali-rolling:latest
-      options: --privileged
     timeout-minutes: 360
 
     steps:
-      - name: Update and Install Core
+      - name: Install Desktop + XRDP from Ubuntu Repos
         run: |
-          apt update
-          apt install -y sudo curl wget gnupg2 dbus-x11 xfce4 xfce4-goodies xrdp xorgxrdp
-          # Mock systemctl so the install script doesn't fail on systemd-less container
-          sudo ln -sf /bin/true /usr/local/sbin/systemctl
-          # Install Tailscale via official script
-          curl -fsSL https://tailscale.com/install.sh | sh
-          # Restore real systemctl path (best effort)
-          sudo rm -f /usr/local/sbin/systemctl
-          
+          sudo apt update
+          # Install XFCE and XRDP from Ubuntu BEFORE adding Kali repo
+          # This avoids libc6/xorgxrdp version conflicts entirely
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+            xfce4 xfce4-goodies xrdp dbus-x11 curl wget gnupg2
+
+      - name: Add Kali Repository
+        run: |
+          curl -fsSL https://archive.kali.org/archive-key.asc | \
+            sudo gpg --dearmor -o /usr/share/keyrings/kali-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware" | \
+            sudo tee /etc/apt/sources.list.d/kali.list
+          # Hold core Ubuntu system packages so Kali can't overwrite them
+          sudo apt-mark hold base-files base-passwd libc6 libc-bin
+          sudo apt update
+
       - name: Install Kali Tools
         run: |
-          # We use headless/default to save space, but you can change this back to 'large'
-          sudo apt install -y kali-linux-default
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+            -o Dpkg::Options::="--force-confold" \
+            kali-linux-default
 
       - name: Create RDP User
         run: |
@@ -38,39 +43,32 @@ jobs:
         run: |
           echo "exec startxfce4" | sudo tee /home/kali/.xsession
           sudo chown kali:kali /home/kali/.xsession
-          
-          # Configure XRDP to work in a container (no systemd)
-          sudo sed -i 's/port=3389/port=3389/g' /etc/xrdp/xrdp.ini
-          # Disable window management in xrdp for better container compatibility
-          sudo sed -i 's/use_separate_auth=true/use_separate_auth=false/g' /etc/xrdp/sesman.ini
+          echo "allowed_users=anybody" | sudo tee /etc/X11/Xwrapper.config
+          sudo adduser xrdp ssl-cert || true
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
 
-      - name: Start Services
+      - name: Install Tailscale
         run: |
-          # Start DBUS and XRDP manually since containers don't have systemd
-          sudo mkdir -p /var/run/dbus
-          sudo dbus-daemon --system --fork || true
-          sudo xrdp-sesman
-          sudo xrdp
-          
+          curl -fsSL https://tailscale.com/install.sh | sh
+
       - name: Connect Tailscale
         run: |
-          # Start Tailscale in the background
-          sudo tailscaled --tun=userspace-networking --socks5-server=localhost:1055 &
-          sleep 5
           sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=github-kali
-          
+
       - name: Show Connection Info
         run: |
           echo "========== CONNECTION INFO =========="
-          echo "Tailscale IP:"
-          tailscale ip -4
-          echo "User: kali"
-          echo "Pass: KaliPassword123!"
+          echo "Tailscale IP: $(tailscale ip -4)"
+          echo "RDP Port:     3389"
+          echo "User:         kali"
+          echo "Pass:         KaliPassword123!"
           echo "====================================="
 
       - name: Keep Runner Alive
         run: |
           while true; do
-            echo "[KEEPALIVE] Kali GUI container alive"
+            echo "[KEEPALIVE] Kali GUI runner alive"
             sleep 60
           done
+
