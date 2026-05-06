@@ -5,7 +5,7 @@ on:
 
 jobs:
   kali-gui:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 360
 
     steps:
@@ -43,14 +43,15 @@ jobs:
 
       - name: Install XFCE Desktop + XRDP
         run: |
-          # Install xorgxrdp (needed for the X server) and xserver-xorg-legacy
+          # Install xorgxrdp and xserver-xorg-legacy
           sudo DEBIAN_FRONTEND=noninteractive apt install -y \
             -o Dpkg::Options::="--force-confold" \
             xfce4 xfce4-goodies xrdp xorgxrdp dbus-x11 xserver-xorg-legacy || \
             (sudo sed -i 's/u!/u/g' /usr/lib/sysusers.d/rtkit.conf 2>/dev/null || true && \
-             sudo apt install -y -f)
+             sudo apt install -y -f && \
+             sudo DEBIAN_FRONTEND=noninteractive apt install -y xfce4 xfce4-goodies xrdp xorgxrdp dbus-x11 xserver-xorg-legacy)
           
-          # Allow anyone to start the X server (critical for XRDP on Ubuntu/Kali)
+          # Allow anyone to start the X server
           echo "allowed_users=anybody" | sudo tee /etc/X11/Xwrapper.config
 
       - name: Install Kali Tools
@@ -60,7 +61,8 @@ jobs:
             -o Dpkg::Options::="--force-confold" \
             kali-linux-large || \
             (sudo sed -i 's/u!/u/g' /usr/lib/sysusers.d/rtkit.conf 2>/dev/null || true && \
-             sudo apt install -y -f)
+             sudo apt install -y -f && \
+             sudo DEBIAN_FRONTEND=noninteractive apt install -y kali-linux-large)
 
       - name: Configure XRDP
         run: |
@@ -68,8 +70,10 @@ jobs:
           echo "exec startxfce4" | sudo tee /home/kali/.xsession
           sudo chown kali:kali /home/kali/.xsession
           
-          # Add xrdp user to ssl-cert group to access keys
-          sudo usermod -aG ssl-cert xrdp
+          # Add xrdp user to ssl-cert group ONLY if it exists
+          if id -u xrdp >/dev/null 2>&1; then
+            sudo usermod -aG ssl-cert xrdp
+          fi
           
           sudo systemctl enable xrdp
           sudo systemctl restart xrdp
