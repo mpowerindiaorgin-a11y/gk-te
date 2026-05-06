@@ -32,16 +32,32 @@ jobs:
           echo "kali:KaliPassword123!" | sudo chpasswd
           sudo usermod -aG sudo kali
 
+      - name: Pre-fix Distro Conflicts
+        run: |
+          # Fix rtkit 'Unknown modifier u!' error by providing a compatible override
+          sudo mkdir -p /etc/sysusers.d/
+          echo 'u rtkit - "RealtimeKit" /proc' | sudo tee /etc/sysusers.d/rtkit.conf
+          
+          # Ensure the systemd directory exists
+          sudo mkdir -p /usr/lib/sysusers.d/
+
       - name: Install XFCE Desktop + XRDP
         run: |
+          # We use --fix-broken and force-confold to handle any other minor distro mismatches
           sudo DEBIAN_FRONTEND=noninteractive apt install -y \
-            xfce4 xfce4-goodies xrdp dbus-x11
+            -o Dpkg::Options::="--force-confold" \
+            xfce4 xfce4-goodies xrdp dbus-x11 || \
+            (sudo sed -i 's/u!/u/g' /usr/lib/sysusers.d/rtkit.conf 2>/dev/null || true && \
+             sudo apt install -y -f)
 
       - name: Install Kali Tools
         run: |
           # Note: kali-linux-large is very big and may hit disk limits
           sudo DEBIAN_FRONTEND=noninteractive apt install -y \
-            kali-linux-large
+            -o Dpkg::Options::="--force-confold" \
+            kali-linux-large || \
+            (sudo sed -i 's/u!/u/g' /usr/lib/sysusers.d/rtkit.conf 2>/dev/null || true && \
+             sudo apt install -y -f)
 
       - name: Configure XRDP
         run: |
