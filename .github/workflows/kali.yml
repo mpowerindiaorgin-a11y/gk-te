@@ -43,12 +43,15 @@ jobs:
 
       - name: Install XFCE Desktop + XRDP
         run: |
-          # We use --fix-broken and force-confold to handle any other minor distro mismatches
+          # Install xorgxrdp (needed for the X server) and xserver-xorg-legacy
           sudo DEBIAN_FRONTEND=noninteractive apt install -y \
             -o Dpkg::Options::="--force-confold" \
-            xfce4 xfce4-goodies xrdp dbus-x11 || \
+            xfce4 xfce4-goodies xrdp xorgxrdp dbus-x11 xserver-xorg-legacy || \
             (sudo sed -i 's/u!/u/g' /usr/lib/sysusers.d/rtkit.conf 2>/dev/null || true && \
              sudo apt install -y -f)
+          
+          # Allow anyone to start the X server (critical for XRDP on Ubuntu/Kali)
+          echo "allowed_users=anybody" | sudo tee /etc/X11/Xwrapper.config
 
       - name: Install Kali Tools
         run: |
@@ -61,8 +64,13 @@ jobs:
 
       - name: Configure XRDP
         run: |
-          echo "startxfce4" | sudo tee /home/kali/.xsession
+          # Use 'exec' to ensure the session starts correctly
+          echo "exec startxfce4" | sudo tee /home/kali/.xsession
           sudo chown kali:kali /home/kali/.xsession
+          
+          # Add xrdp user to ssl-cert group to access keys
+          sudo usermod -aG ssl-cert xrdp
+          
           sudo systemctl enable xrdp
           sudo systemctl restart xrdp
 
