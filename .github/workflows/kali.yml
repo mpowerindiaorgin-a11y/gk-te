@@ -1,0 +1,68 @@
+name: Full Kali GUI via GitHub Actions + Tailscale
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kali-gui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Update System
+        run: |
+          sudo apt update
+          sudo apt install -y curl wget gnupg2 software-properties-common
+
+      - name: Add Kali Repository
+        run: |
+          echo "deb http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware" | sudo tee /etc/apt/sources.list.d/kali.list
+          curl -fsSL https://archive.kali.org/archive-key.asc | sudo gpg --dearmor -o /usr/share/keyrings/kali-archive-keyring.gpg
+          sudo apt update
+
+      - name: Install XFCE Desktop + XRDP
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+            xfce4 xfce4-goodies xrdp dbus-x11
+
+      - name: Install Kali Tools
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+            kali-linux-large
+
+      - name: Configure XRDP
+        run: |
+          echo "startxfce4" > ~/.xsession
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
+
+      - name: Create RDP User
+        run: |
+          sudo useradd -m kali || true
+          echo "kali:KaliPassword123!" | sudo chpasswd
+          sudo usermod -aG sudo kali
+
+      - name: Allow RDP Firewall
+        run: |
+          sudo ufw allow 3389 || true
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Connect Tailscale
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=github-kali
+
+      - name: Show Tailscale IP
+        run: |
+          echo "========== TAILSCALE IP =========="
+          tailscale ip -4
+          echo "=================================="
+
+      - name: Keep Runner Alive
+        run: |
+          while true; do
+            echo "[KEEPALIVE] Kali GUI runner alive"
+            sleep 60
+          done
