@@ -5,26 +5,22 @@ on:
 
 jobs:
   kali-gui:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    container:
+      image: kalilinux/kali-rolling:latest
+      options: --privileged
     timeout-minutes: 360
 
     steps:
-      - name: Update System
+      - name: Update and Install Core
         run: |
-          sudo apt update
-          sudo apt install -y curl wget gnupg2 software-properties-common
-
-      - name: Add Kali Repository
+          apt update
+          apt install -y sudo curl wget gnupg2 dbus-x11 xfce4 xfce4-goodies xrdp xorgxrdp tailscale
+          
+      - name: Install Kali Tools
         run: |
-          curl -fsSL https://archive.kali.org/archive-key.asc | sudo gpg --dearmor -o /usr/share/keyrings/kali-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware" | sudo tee /etc/apt/sources.list.d/kali.list
-          
-          # Hold only base-files to prevent the UsrMerge clash
-          # We remove the priority pin to allow tools to upgrade their dependencies (Ruby, Python, etc.)
-          sudo apt-mark hold base-files
-          sudo rm -f /etc/apt/preferences.d/kali
-          
-          sudo apt update
+          # We use headless/default to save space, but you can change this back to 'large'
+          sudo apt install -y kali-linux-default
 
       - name: Create RDP User
         run: |
@@ -32,73 +28,43 @@ jobs:
           echo "kali:KaliPassword123!" | sudo chpasswd
           sudo usermod -aG sudo kali
 
-      - name: Pre-fix Distro Conflicts
-        run: |
-          # Fix rtkit 'Unknown modifier u!' error by providing a compatible override
-          sudo mkdir -p /etc/sysusers.d/
-          echo 'u rtkit - "RealtimeKit" /proc' | sudo tee /etc/sysusers.d/rtkit.conf
-          
-          # Ensure the systemd directory exists
-          sudo mkdir -p /usr/lib/sysusers.d/
-
-      - name: Install XFCE Desktop + XRDP
-        run: |
-          # Install xorgxrdp and xserver-xorg-legacy
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
-            -o Dpkg::Options::="--force-confold" \
-            xfce4 xfce4-goodies xrdp xorgxrdp dbus-x11 xserver-xorg-legacy || \
-            (sudo sed -i 's/u!/u/g' /usr/lib/sysusers.d/rtkit.conf 2>/dev/null || true && \
-             sudo apt install -y -f && \
-             sudo DEBIAN_FRONTEND=noninteractive apt install -y xfce4 xfce4-goodies xrdp xorgxrdp dbus-x11 xserver-xorg-legacy)
-          
-          # Allow anyone to start the X server
-          echo "allowed_users=anybody" | sudo tee /etc/X11/Xwrapper.config
-
-      - name: Install Kali Tools
-        run: |
-          # Note: kali-linux-large is very big and may hit disk limits
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
-            -o Dpkg::Options::="--force-confold" \
-            kali-linux-large || \
-            (sudo sed -i 's/u!/u/g' /usr/lib/sysusers.d/rtkit.conf 2>/dev/null || true && \
-             sudo apt install -y -f && \
-             sudo DEBIAN_FRONTEND=noninteractive apt install -y kali-linux-large)
-
       - name: Configure XRDP
         run: |
-          # Use 'exec' to ensure the session starts correctly
           echo "exec startxfce4" | sudo tee /home/kali/.xsession
           sudo chown kali:kali /home/kali/.xsession
           
-          # Add xrdp user to ssl-cert group ONLY if it exists
-          if id -u xrdp >/dev/null 2>&1; then
-            sudo usermod -aG ssl-cert xrdp
-          fi
+          # Configure XRDP to work in a container (no systemd)
+          sudo sed -i 's/port=3389/port=3389/g' /etc/xrdp/xrdp.ini
+          # Disable window management in xrdp for better container compatibility
+          sudo sed -i 's/use_separate_auth=true/use_separate_auth=false/g' /etc/xrdp/sesman.ini
+
+      - name: Start Services
+        run: |
+          # Start DBUS and XRDP manually since containers don't have systemd
+          sudo mkdir -p /var/run/dbus
+          sudo dbus-daemon --system --fork || true
+          sudo xrdp-sesman
+          sudo xrdp
           
-          sudo systemctl enable xrdp
-          sudo systemctl restart xrdp
-
-      - name: Allow RDP Firewall
-        run: |
-          sudo ufw allow 3389 || true
-
-      - name: Install Tailscale
-        run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
-
       - name: Connect Tailscale
         run: |
+          # Start Tailscale in the background
+          sudo tailscaled --tun=userspace-networking --socks5-server=localhost:1055 &
+          sleep 5
           sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=github-kali
-
-      - name: Show Tailscale IP
+          
+      - name: Show Connection Info
         run: |
-          echo "========== TAILSCALE IP =========="
+          echo "========== CONNECTION INFO =========="
+          echo "Tailscale IP:"
           tailscale ip -4
-          echo "=================================="
+          echo "User: kali"
+          echo "Pass: KaliPassword123!"
+          echo "====================================="
 
       - name: Keep Runner Alive
         run: |
           while true; do
-            echo "[KEEPALIVE] Kali GUI runner alive"
+            echo "[KEEPALIVE] Kali GUI container alive"
             sleep 60
           done
