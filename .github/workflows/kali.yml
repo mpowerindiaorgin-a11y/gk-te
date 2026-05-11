@@ -11,41 +11,19 @@ jobs:
     steps:
       - name: Free Disk Space
         run: |
-          # Remove unnecessary pre-installed software to free space for Kali tools
+          # Remove unnecessary pre-installed software to free space
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
           sudo apt-get purge -y dotnet* google-cloud* azure-cli microsoft-edge* 2>/dev/null || true
           sudo apt-get autoremove -y
           df -h /
 
-      - name: Add Kali Repository
+      # ── Phase 1: Install XFCE desktop + XRDP from Ubuntu repos ──
+      # This guarantees a working RDP server with zero dependency conflicts.
+      - name: Install Desktop + XRDP (Ubuntu repos)
         run: |
-          curl -fsSL https://archive.kali.org/archive-key.asc | \
-            sudo gpg --dearmor -o /usr/share/keyrings/kali-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/kali-archive-keyring.gpg] http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware" | \
-            sudo tee /etc/apt/sources.list.d/kali.list
-
-          # Hold ONLY base-files — the one package that causes the UsrMerge diversion crash.
-          # Everything else (libc6, python3, perl) MUST be allowed to upgrade for Kali tools to work.
-          sudo apt-mark hold base-files
-
-          # Pre-fix rtkit: Kali's rtkit.conf uses 'u!' modifier that Ubuntu's systemd doesn't understand
-          sudo mkdir -p /etc/sysusers.d
-          echo 'u rtkit - "RealtimeKit" /proc' | sudo tee /etc/sysusers.d/rtkit.conf
-
-          sudo apt update
-
-      - name: Install Desktop + XRDP + Kali Tools
-        run: |
-          # Install everything in one shot so apt can resolve the full dependency tree.
-          # force-confold keeps existing Ubuntu config files when Kali provides replacements.
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
-            -o Dpkg::Options::="--force-confold" \
-            -o Dpkg::Options::="--force-overwrite" \
-            xfce4 xfce4-goodies xrdp dbus-x11 kali-linux-default || \
-            (sudo sed -i 's/u!/u/g' /usr/lib/sysusers.d/rtkit.conf 2>/dev/null || true && \
-             sudo DEBIAN_FRONTEND=noninteractive apt install -y -f \
-               -o Dpkg::Options::="--force-confold" \
-               -o Dpkg::Options::="--force-overwrite")
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            xfce4 xfce4-goodies xrdp xorgxrdp dbus-x11
 
       - name: Create RDP User
         run: |
@@ -58,30 +36,101 @@ jobs:
           echo "exec startxfce4" | sudo tee /home/kali/.xsession
           sudo chown kali:kali /home/kali/.xsession
           echo "allowed_users=anybody" | sudo tee /etc/X11/Xwrapper.config
-          sudo adduser xrdp ssl-cert || true
+          sudo adduser xrdp ssl-cert
           sudo systemctl enable xrdp
           sudo systemctl restart xrdp
 
-      - name: Install Tailscale
+      # ── Phase 2: Pull official Kali container with all tools ──
+      # Run a full Kali environment inside Docker. The RDP desktop can
+      # launch terminals that exec into this container seamlessly.
+      - name: Pull & Start Kali Container
+        run: |
+          docker pull kalilinux/kali-rolling:latest
+          docker run -d --name kali \
+            --network host \
+            --privileged \
+            kalilinux/kali-rolling:latest \
+            bash -c "
+              apt-get update && \
+              DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                kali-linux-headless \
+                kali-tools-top10 \
+                kali-tools-web \
+                kali-tools-passwords \
+                kali-tools-exploitation && \
+              tail -f /dev/null
+            "
+
+      # ── Phase 3: Create a seamless bridge script ──
+      # Typing 'kali' in any terminal drops you into the full Kali environment.
+      - name: Create Kali Bridge
+        run: |
+          # Wait for the container to finish installing (check every 30s, up to 45 min)
+          echo "Waiting for Kali container to finish installing tools..."
+          for i in $(seq 1 90); do
+            if docker exec kali which nmap >/dev/null 2>&1; then
+              echo "Kali tools are ready!"
+              break
+            fi
+            echo "  Still installing... ($i/90)"
+            sleep 30
+          done
+
+          # Create a wrapper script so 'kali' drops into the container
+          sudo tee /usr/local/bin/kali << 'WRAPPER'
+          #!/bin/bash
+          exec docker exec -it kali bash "$@"
+          WRAPPER
+          sudo chmod +x /usr/local/bin/kali
+
+          # Add a desktop shortcut for XFCE
+          sudo mkdir -p /home/kali/Desktop
+          sudo tee /home/kali/Desktop/kali-terminal.desktop << 'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=Kali Terminal
+          Comment=Open a terminal inside the Kali container
+          Exec=xfce4-terminal -e "docker exec -it kali bash"
+          Icon=utilities-terminal
+          Terminal=false
+          Categories=System;
+          DESKTOP
+          sudo chmod +x /home/kali/Desktop/kali-terminal.desktop
+          sudo chown -R kali:kali /home/kali/Desktop
+
+      # ── Phase 4: Tailscale for remote access ──
+      - name: Install & Connect Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
-
-      - name: Connect Tailscale
-        run: |
           sudo tailscale up --authkey=${{ secrets.TS_KEY }} --hostname=github-kali
 
       - name: Show Connection Info
         run: |
-          echo "========== CONNECTION INFO =========="
-          echo "Tailscale IP: $(tailscale ip -4)"
-          echo "RDP Port:     3389"
-          echo "User:         kali"
-          echo "Pass:         KaliPassword123!"
-          echo "====================================="
+          echo "========================================="
+          echo "  Kali GUI Runner is READY"
+          echo "========================================="
+          echo ""
+          echo "  Tailscale IP : $(tailscale ip -4)"
+          echo "  RDP Port     : 3389"
+          echo "  Username     : kali"
+          echo "  Password     : KaliPassword123!"
+          echo ""
+          echo "  After RDP login, open a terminal and"
+          echo "  type 'kali' to enter the Kali container"
+          echo "  with all tools pre-installed."
+          echo ""
+          echo "  Or double-click 'Kali Terminal' on the"
+          echo "  desktop."
+          echo "========================================="
 
       - name: Keep Runner Alive
         run: |
           while true; do
-            echo "[KEEPALIVE] Kali GUI runner alive"
+            # Verify services are still running
+            docker ps --filter name=kali --format "{{.Status}}" | grep -q "Up" || \
+              docker start kali 2>/dev/null
+            sudo systemctl is-active xrdp >/dev/null 2>&1 || \
+              sudo systemctl restart xrdp
+            echo "[KEEPALIVE] $(date) — XRDP + Kali container running"
             sleep 60
           done
