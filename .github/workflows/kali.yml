@@ -36,7 +36,8 @@ jobs:
           sudo tee /home/kali/.xsession << 'EOF'
           unset DBUS_SESSION_BUS_ADDRESS
           unset XDG_RUNTIME_DIR
-          exec startxfce4
+          export XDG_CONFIG_DIRS="/etc/xdg:/etc"
+          exec dbus-run-session startxfce4
           EOF
           sudo chmod +x /home/kali/.xsession
           sudo chown kali:kali /home/kali/.xsession
