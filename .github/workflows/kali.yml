@@ -33,7 +33,12 @@ jobs:
 
       - name: Configure XRDP
         run: |
-          echo "exec startxfce4" | sudo tee /home/kali/.xsession
+          sudo tee /home/kali/.xsession << 'EOF'
+          unset DBUS_SESSION_BUS_ADDRESS
+          unset XDG_RUNTIME_DIR
+          exec startxfce4
+          EOF
+          sudo chmod +x /home/kali/.xsession
           sudo chown kali:kali /home/kali/.xsession
           echo "allowed_users=anybody" | sudo tee /etc/X11/Xwrapper.config
           sudo adduser xrdp ssl-cert
