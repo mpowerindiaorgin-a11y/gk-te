@@ -41,6 +41,20 @@ jobs:
           EOF
           sudo chmod +x /home/kali/.xsession
           sudo chown kali:kali /home/kali/.xsession
+          
+          sudo tee /etc/xrdp/startwm.sh << 'EOF'
+          #!/bin/sh
+          if [ -r /etc/default/locale ]; then
+            . /etc/default/locale
+            export LANG LANGUAGE
+          fi
+          unset DBUS_SESSION_BUS_ADDRESS
+          unset XDG_RUNTIME_DIR
+          export XDG_CONFIG_DIRS="/etc/xdg:/etc"
+          exec dbus-run-session startxfce4
+          EOF
+          sudo chmod +x /etc/xrdp/startwm.sh
+          
           echo "allowed_users=anybody" | sudo tee /etc/X11/Xwrapper.config
           sudo adduser xrdp ssl-cert
           sudo systemctl enable xrdp
